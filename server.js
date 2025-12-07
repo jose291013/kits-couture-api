@@ -7,6 +7,17 @@ const PORT = process.env.PORT || 3000;
 const SPREADSHEET_ID = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
 const GOOGLE_SHEETS_SPREADSHEET_ID = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
 const SERVICE_ACCOUNT_KEY = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
+// === PJM CONFIG ===
+const PJM_BASE_URL = process.env.PJM_BASE_URL || '';
+const PJM_USERNAME = process.env.PJM_USERNAME || '';
+const PJM_PASSWORD = process.env.PJM_PASSWORD || '';
+const PJM_ENGINE_INTEGRATION_ID = process.env.PJM_ENGINE_INTEGRATION_ID || '';
+
+let pjmTokenCache = {
+  token: null,
+  expiresAt: 0
+};
+
 
 if (!SPREADSHEET_ID) {
   console.error('❌ GOOGLE_SHEETS_SPREADSHEET_ID manquant dans les variables d’environnement.');
@@ -146,6 +157,66 @@ function kitToRow(kit) {
     kit.pjmOptionsJson || ''           // S - PJMOptionsJSON
   ];
 }
+
+async function getPjmToken() {
+  const now = Date.now();
+  if (pjmTokenCache.token && pjmTokenCache.expiresAt > now + 60_000) {
+    return pjmTokenCache.token;
+  }
+
+  if (!PJM_BASE_URL || !PJM_USERNAME || !PJM_PASSWORD) {
+    throw new Error('PJM credentials are not configured');
+  }
+
+  const url = `${PJM_BASE_URL}/public/authenticate`;
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      Username: PJM_USERNAME,
+      Password: PJM_PASSWORD
+    })
+  });
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '');
+    throw new Error(`PJM authenticate HTTP ${res.status}: ${txt}`);
+  }
+
+  const data = await res.json();
+  if (!data || !data.Token) {
+    throw new Error('PJM authenticate: Token missing in response');
+  }
+
+  pjmTokenCache.token = data.Token;
+
+  const durationMinutes = data.TokenDuration || 30;
+  pjmTokenCache.expiresAt = now + durationMinutes * 60_000;
+
+  return pjmTokenCache.token;
+}
+async function callPjmApi(path, body) {
+  const token = await getPjmToken();
+  const url = `${PJM_BASE_URL}${path}`;
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify(body || {})
+  });
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '');
+    throw new Error(`PJM ${path} HTTP ${res.status}: ${txt}`);
+  }
+
+  return res.json();
+}
+
 
 
 // ===================== ROUTES ADMIN KITS =====================
@@ -327,6 +398,43 @@ app.post('/admin/kits/save', express.json(), async (req, res) => {
     });
   }
 });
+
+// ===================== ADMIN - OPTIONS PJM POUR UN MOTEUR =====================
+// GET /admin/pjm/options?engineId=...
+// - Récupère la liste des options pour un moteur PJM
+app.get('/admin/pjm/options', async (req, res) => {
+  try {
+    const engineId = (req.query.engineId || PJM_ENGINE_INTEGRATION_ID || '').trim();
+    if (!engineId) {
+      return res.status(400).json({ error: 'Missing engineId' });
+    }
+
+    // ⚠️ Adaptation à TON appel PJM réel :
+    // Ici on part sur un appel "details" avec Operation: "options"
+    const payload = {
+      Operation: 'options',
+      Product: engineId,
+      Options: [] // aucune sélection initiale => on veut juste la structure
+    };
+
+    const data = await callPjmApi('/public/engine', payload);
+
+    // On renvoie la payload brute, mais surtout data.Options
+    return res.json({
+      ok: true,
+      engineId,
+      raw: data,
+      options: data.Options || data.options || []
+    });
+  } catch (err) {
+    console.error('[ADMIN /admin/pjm/options] Error:', err);
+    return res.status(500).json({
+      error: 'Error loading PJM options',
+      details: err.message || String(err)
+    });
+  }
+});
+
 
 
 
