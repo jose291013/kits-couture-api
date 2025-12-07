@@ -5,6 +5,7 @@ const { google } = require('googleapis');
 // ====== CONFIG ENV ======
 const PORT = process.env.PORT || 3000;
 const SPREADSHEET_ID = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
+const GOOGLE_SHEETS_SPREADSHEET_ID = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
 const SERVICE_ACCOUNT_KEY = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
 
 if (!SPREADSHEET_ID) {
