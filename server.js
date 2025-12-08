@@ -436,50 +436,71 @@ app.get('/admin/pjm/options', async (req, res) => {
 });
 
 // ===================== ADMIN - OPTIONS + PRIX PJM =====================
-// POST /admin/pjm/optionsandprice
-// Body: { engineId?: string, options?: [...] }
-// -> appelle PJM avec Operation: "optionsandprice"
+// On envoie à cette route un tableau "selections" simplifié :
+// selections = [ { optionId, key, value }, ... ]
+// La route le transforme en payload PJM (Options: [...]) et appelle
+// Operation: "optionsandprice" pour récupérer options filtrées + prix.
+
 app.post('/admin/pjm/optionsandprice', async (req, res) => {
   try {
-    const engineId = (req.body.engineId || PJM_ENGINE_INTEGRATION_ID || '').trim();
-    const options = Array.isArray(req.body.options) ? req.body.options : [];
-
-    if (!engineId) {
-      return res.status(400).json({ error: 'Missing engineId' });
+    if (!PJM_ENGINE_INTEGRATION_ID) {
+      return res.status(500).json({ error: 'PJM_ENGINE_INTEGRATION_ID manquant' });
     }
+
+    // On reçoit { selections: [ { optionId, key, value }, ... ] }
+    const selections = Array.isArray(req.body.selections) ? req.body.selections : [];
+
+    // On les mappe vers le format minimal Id + Value pour PJM
+    const optionsForPjm = selections.map(sel => ({
+      Id: sel.optionId,
+      Value: sel.value
+    }));
 
     const payload = {
       Operation: 'optionsandprice',
-      Product: engineId,
-      Options: options
+      Product: PJM_ENGINE_INTEGRATION_ID,
+      Options: optionsForPjm
     };
 
-    const data = await callPjmApi('/public/engine', payload);
+    console.log('[PJM] Payload envoyé à /api/public/engine :', JSON.stringify(payload, null, 2));
 
-    // On essaie de deviner où est le prix (à ajuster si besoin)
-    const price =
-      (data.Price && (data.Price.Total || data.Price.total || data.Price.Price)) ||
-      data.PriceTotal ||
-      data.Price ||
-      null;
+    const token = await getPjmToken();
+
+    const resp = await fetch(PJM_BASE_URL + '/api/public/engine', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!resp.ok) {
+      const txt = await resp.text();
+      console.error('[PJM] Erreur optionsandprice', resp.status, txt);
+      return res.status(500).json({
+        error: 'Appel PJM optionsandprice échoué',
+        status: resp.status,
+        body: txt
+      });
+    }
+
+    const data = await resp.json();
 
     res.json({
-      ok: true,
-      engineId,
-      payloadSent: payload,
-      raw: data,
-      options: data.Options || data.options || [],
-      price
+      price: data.Price ?? null,
+      weight: data.Weight ?? null,
+      options: data.Options || [],
+      raw: data
     });
   } catch (err) {
-    console.error('[ADMIN /admin/pjm/optionsandprice] Error:', err);
+    console.error('Erreur /admin/pjm/optionsandprice', err);
     res.status(500).json({
-      error: 'Error loading PJM options & price',
-      details: err.message || String(err)
+      error: 'Erreur serveur /admin/pjm/optionsandprice',
+      details: String(err && err.message ? err.message : err)
     });
   }
 });
-
 
 
 // Endpoint de test
